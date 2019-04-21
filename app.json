@@ -1,0 +1,10 @@
+
+{
+    "name": "Sardene-API",
+    "description": "API server for Sardene app",
+    "keywords": [
+      "go"
+    ],
+    "website": "https://sardene-api.herokuapp.com/",
+    "repository": "https://github.com/M-ZubairAhmed/Sardene-API"
+  }
