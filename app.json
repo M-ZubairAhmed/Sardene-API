@@ -1,0 +1,9 @@
+{
+  "name": "Sardene API",
+  "description": "API backend server for Sardene app",
+  "keywords": [
+    "go"
+  ],
+  "website": "https://github.com/M-ZubairAhmed/Sardene-API",
+  "repository": "https://github.com/M-ZubairAhmed/Sardene-API"
+}
