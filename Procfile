@@ -1,1 +1,1 @@
-web: bin/sardene-api
+web: bin/src

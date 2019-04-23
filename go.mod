@@ -1,4 +1,4 @@
-module github.com/M-ZubairAhmed/Sardene-API
+module github.com/m-zubairahmed/sardene-api
 
 go 1.12
 
