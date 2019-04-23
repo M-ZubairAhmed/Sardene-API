@@ -2,7 +2,7 @@
 # Officially unsupported, but works.
 build:
   languages:
-    - go 1.12
+    - go
 
 run:
   web: sardene-api
