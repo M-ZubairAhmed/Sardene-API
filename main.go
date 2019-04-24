@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http"
+	"os"
 
 	"github.com/gin-gonic/gin"
 )
@@ -19,7 +20,7 @@ func ping(gContext *gin.Context) {
 }
 
 func main() {
-	port := "8000"
+	port := os.Getenv("PORT")
 
 	router := gin.New()
 	router.Use(gin.Logger())
