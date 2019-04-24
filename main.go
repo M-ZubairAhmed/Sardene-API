@@ -8,7 +8,7 @@ import (
 )
 
 func welcome(gContext *gin.Context) {
-	message := "Welcome to Sardene API, \nplease visit https://github.com/M-ZubairAhmed/Sardene-API for complete documentation."
+	message := "Welcome to Sardene API, \nVisit https://github.com/M-ZubairAhmed/Sardene-API for documentation."
 	gContext.String(http.StatusOK, message)
 }
 
