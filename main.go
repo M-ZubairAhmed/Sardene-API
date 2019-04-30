@@ -22,7 +22,7 @@ type IdeaStructure struct {
 	Description string             `json:"description" bson:"description"`
 	Makers      string             `json:"makers" bson:"makers"`
 	Gazers      string             `json:"gazers" bson:"gazers"`
-	// Dated       primitive.DateTime `json:"dated" bson:"dated"`
+	CreatedAt   int64              `json:"created_at" bson:"created_at"`
 }
 
 func connectToDatabase() *mongo.Client {
@@ -115,11 +115,14 @@ func addIdea(gContext *gin.Context) {
 	connectContext, errorInContext := context.WithTimeout(context.Background(), 30*time.Second)
 	defer errorInContext()
 
+	createdTime := time.Now().Unix()
+
 	docu := bson.M{
 		"name":        "My first title",
 		"description": "description goes here and here",
 		"makers":      "0",
 		"gazers":      "0",
+		"created_at":  createdTime,
 	}
 
 	resultOfAdding, errInAdding := ideasCollection.InsertOne(connectContext, docu)
