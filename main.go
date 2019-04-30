@@ -10,23 +10,26 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/mongodb/mongo-go-driver/bson"
-	// "github.com/mongodb/mongo-go-driver/bson/primitive"
+	"github.com/mongodb/mongo-go-driver/bson/primitive"
 	"github.com/mongodb/mongo-go-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 // IdeaStructure : Structure of Idea in database
 type IdeaStructure struct {
-	// ID          primitive.ObjectID `json:"_id" bson:"_id"`
-	Name        string `json:"name" bson:"name"`
-	Description string `json:"description" bson:"description"`
-	Makers      string `json:"makers" bson:"makers"`
-	Gazers      string `json:"gazers" bson:"gazers"`
+	ID          primitive.ObjectID `json:"id" bson:"_id"`
+	Name        string             `json:"name" bson:"name"`
+	Description string             `json:"description" bson:"description"`
+	Makers      string             `json:"makers" bson:"makers"`
+	Gazers      string             `json:"gazers" bson:"gazers"`
 	// Dated       primitive.DateTime `json:"dated" bson:"dated"`
 }
 
 func connectToDatabase() *mongo.Client {
 	mlabsDbURL := os.Getenv("MONGO_DB_URL")
+	if len(mlabsDbURL) == 0 {
+		log.Fatal("No Database URL provided")
+	}
 	databaseURL := fmt.Sprint(mlabsDbURL)
 	connectOptions := options.Client()
 	connectOptions.ApplyURI(databaseURL)
@@ -68,7 +71,6 @@ func getIdeas(gContext *gin.Context) {
 	var ideas []*IdeaStructure
 
 	databaseClient := connectToDatabase()
-
 	ideasCollection := databaseClient.Database("sardene-db").Collection("ideas")
 
 	connectContext, errorInContext := context.WithTimeout(context.Background(), 30*time.Second)
@@ -106,7 +108,30 @@ func getIdeas(gContext *gin.Context) {
 	gContext.JSON(http.StatusOK, gin.H{"status": http.StatusOK, "data": ideas, "count": lenghtOfIdeas})
 }
 
-func addIdea(gContext *gin.Context) {}
+func addIdea(gContext *gin.Context) {
+	databaseClient := connectToDatabase()
+	ideasCollection := databaseClient.Database("sardene-db").Collection("ideas")
+
+	connectContext, errorInContext := context.WithTimeout(context.Background(), 30*time.Second)
+	defer errorInContext()
+
+	docu := bson.M{
+		"name":        "My first title",
+		"description": "description goes here and here",
+		"makers":      "0",
+		"gazers":      "0",
+	}
+
+	resultOfAdding, errInAdding := ideasCollection.InsertOne(connectContext, docu)
+	if errInAdding != nil {
+		log.Fatal(errInAdding)
+	}
+	fmt.Printf(
+		"new post created with id: %s",
+		resultOfAdding.InsertedID.(primitive.ObjectID).Hex(),
+	)
+
+}
 
 func updateIdea(gContext *gin.Context) {}
 
@@ -127,9 +152,9 @@ func main() {
 	// router.GET("/ideas/:page", getIdeas)
 	router.GET("/ideas", getIdeas)
 
-	// router.POST("/idea", addIdea)
+	router.GET("/idea/add", addIdea)
 
-	// router.PUT("/idea/:ideaID", updateIdea)
+	// router.PUT("/updateidea/:ideaID", updateIdea)
 
 	router.Run(":" + port)
 }
