@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -115,25 +116,51 @@ func addIdea(gContext *gin.Context) {
 	connectContext, errorInContext := context.WithTimeout(context.Background(), 30*time.Second)
 	defer errorInContext()
 
+	var jsonInput IdeaStructure
 	createdTime := time.Now().Unix()
 
-	docu := bson.M{
-		"name":        "My first title",
-		"description": "description goes here and here",
+	errInInputJSON := gContext.ShouldBindJSON(&jsonInput)
+	if errInInputJSON != nil {
+		gContext.JSON(http.StatusBadRequest, gin.H{"status": http.StatusBadRequest, "errorCode": "bad_json_structure",
+			"error": "Wrong structure of posted data"})
+		return
+	}
+
+	lengthOfName := len(strings.TrimSpace(jsonInput.Name))
+	lenghtOfDescription := len(strings.TrimSpace(jsonInput.Description))
+
+	if lengthOfName == 0 || lenghtOfDescription == 0 {
+		gContext.JSON(http.StatusBadRequest, gin.H{"status": http.StatusBadRequest, "errorCode": "empty_fields",
+			"error": "Name or description is not provided in the post"})
+		return
+
+	}
+
+	// Cleaning data
+	jsonInput.Name = strings.TrimSpace(jsonInput.Name)
+	jsonInput.Description = strings.TrimSpace(jsonInput.Description)
+
+	ideaToAdd := bson.M{
+		"name":        jsonInput.Name,
+		"description": jsonInput.Description,
 		"makers":      "0",
 		"gazers":      "0",
 		"created_at":  createdTime,
 	}
 
-	resultOfAdding, errInAdding := ideasCollection.InsertOne(connectContext, docu)
+	addedIdea, errInAdding := ideasCollection.InsertOne(connectContext, ideaToAdd)
 	if errInAdding != nil {
+		gContext.JSON(http.StatusInternalServerError, gin.H{"status": http.StatusInternalServerError,
+			"errorCode": "cannot_add_to_db",
+			"error":     "Error while saving to database"})
 		log.Fatal(errInAdding)
+		return
 	}
-	fmt.Printf(
-		"new post created with id: %s",
-		resultOfAdding.InsertedID.(primitive.ObjectID).Hex(),
-	)
 
+	// Get the generated ID from DB
+	jsonInput.ID = addedIdea.InsertedID.(primitive.ObjectID)
+
+	gContext.JSON(http.StatusCreated, gin.H{"status": http.StatusCreated, "data": jsonInput})
 }
 
 func updateIdea(gContext *gin.Context) {}
@@ -155,7 +182,7 @@ func main() {
 	// router.GET("/ideas/:page", getIdeas)
 	router.GET("/ideas", getIdeas)
 
-	router.GET("/idea/add", addIdea)
+	router.POST("/idea/add", addIdea)
 
 	// router.PUT("/updateidea/:ideaID", updateIdea)
 
