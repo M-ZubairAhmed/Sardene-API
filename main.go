@@ -21,8 +21,8 @@ type IdeaStructure struct {
 	ID          primitive.ObjectID `json:"id" bson:"_id"`
 	Name        string             `json:"name" bson:"name"`
 	Description string             `json:"description" bson:"description"`
-	Makers      string             `json:"makers" bson:"makers"`
-	Gazers      string             `json:"gazers" bson:"gazers"`
+	Makers      int64              `json:"makers" bson:"makers"`
+	Gazers      int64              `json:"gazers" bson:"gazers"`
 	CreatedAt   int64              `json:"created_at" bson:"created_at"`
 }
 
@@ -139,12 +139,16 @@ func addIdea(gContext *gin.Context) {
 	// Cleaning data
 	jsonInput.Name = strings.TrimSpace(jsonInput.Name)
 	jsonInput.Description = strings.TrimSpace(jsonInput.Description)
+	// Defaulting data
+	jsonInput.Makers = 0
+	jsonInput.Gazers = 0
+	jsonInput.CreatedAt = createdTime
 
 	ideaToAdd := bson.M{
 		"name":        jsonInput.Name,
 		"description": jsonInput.Description,
-		"makers":      "0",
-		"gazers":      "0",
+		"makers":      jsonInput.Makers,
+		"gazers":      jsonInput.Gazers,
 		"created_at":  createdTime,
 	}
 
@@ -162,8 +166,6 @@ func addIdea(gContext *gin.Context) {
 
 	gContext.JSON(http.StatusCreated, gin.H{"status": http.StatusCreated, "data": jsonInput})
 }
-
-func updateIdea(gContext *gin.Context) {}
 
 func main() {
 	port := os.Getenv("PORT")
