@@ -14,3 +14,7 @@
 # Build folder
 bin/
 sardene-api
+
+# Secret files
+.env.json
+
