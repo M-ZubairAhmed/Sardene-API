@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -42,15 +43,13 @@ func connectToDatabase() *mongo.Client {
 	databaseClient, errInConnection := mongo.Connect(connectContext, connectOptions)
 
 	if errInConnection != nil {
-		log.Fatal(errInConnection)
-		panic("Failed to connect to DB")
+		log.Fatal(errInConnection , "Failed to connect to DB")
 	}
 
 	errInPing := databaseClient.Ping(connectContext, nil)
 
 	if errInPing != nil {
-		log.Fatal(errInPing)
-		panic("DB not found")
+		log.Fatal(errInPing, "DB not found")
 	}
 
 	return databaseClient
@@ -68,30 +67,32 @@ func ping(gContext *gin.Context) {
 	})
 }
 
-func getIdeas(gContext *gin.Context) {
+func getIdeas(gContext *gin.Context, databaseClient *mongo.Client) {
 	var ideas []*IdeaStructure
 
-	databaseClient := connectToDatabase()
 	ideasCollection := databaseClient.Database("sardene-db").Collection("ideas")
 
-	connectContext, errorInContext := context.WithTimeout(context.Background(), 30*time.Second)
-	defer errorInContext()
+	databaseContext, cancelDBContext := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancelDBContext()
 
 	findOptions := options.Find()
-	ideasCursor, errorInFinding := ideasCollection.Find(connectContext, bson.D{{}}, findOptions)
+	ideasCursor, errorInFinding := ideasCollection.Find(databaseContext, bson.D{{}}, findOptions)
 
 	if errorInFinding != nil {
-		log.Fatal(errorInFinding, " // Error in running find on DB")
-		panic("Error in running find on DB")
+		_ = ideasCursor.Close(databaseContext)
+		databaseContext.Done()
+		gContext.JSON(http.StatusServiceUnavailable, gin.H{"status": http.StatusServiceUnavailable, "error": "Error in searching database"})
+		return
 	}
 
-	defer ideasCursor.Close(connectContext)
-
-	for ideasCursor.Next(connectContext) {
+	for ideasCursor.Next(databaseContext) {
 		var idea IdeaStructure
 
 		errInDecoding := ideasCursor.Decode(&idea)
 		if errInDecoding != nil {
+			_ = ideasCursor.Close(databaseContext)
+			databaseContext.Done()
+			gContext.JSON(http.StatusInternalServerError, gin.H{"status": http.StatusInternalServerError, "error": "Error in decoding database"})
 			log.Fatal(errInDecoding)
 		}
 
@@ -100,38 +101,49 @@ func getIdeas(gContext *gin.Context) {
 
 	errInCursor := ideasCursor.Err()
 	if errInCursor != nil {
-		log.Fatal(errInCursor)
+		databaseContext.Done()
+		_ = ideasCursor.Close(databaseContext)
+		gContext.JSON(http.StatusInternalServerError, gin.H{"status": http.StatusInternalServerError, "error": "Error while iterating database"})
 	}
 
-	ideasCursor.Close(connectContext)
+	errInClosingCursor := ideasCursor.Close(databaseContext)
+	if errInClosingCursor != nil{
+		databaseContext.Done()
+		gContext.JSON(http.StatusServiceUnavailable, gin.H{"status": http.StatusServiceUnavailable, "error": "Error while closing iterator of database"})
+		return
+	}
 
-	lenghtOfIdeas := len(ideas)
-	gContext.JSON(http.StatusOK, gin.H{"status": http.StatusOK, "data": ideas, "count": lenghtOfIdeas})
+	lengthOfIdeas := len(ideas)
+	gContext.JSON(http.StatusOK, gin.H{"status": http.StatusOK, "data": ideas, "count": lengthOfIdeas})
+	databaseContext.Done()
+
+	return
 }
 
-func addIdea(gContext *gin.Context) {
-	databaseClient := connectToDatabase()
+func addIdea(gContext *gin.Context, databaseClient *mongo.Client) {
 	ideasCollection := databaseClient.Database("sardene-db").Collection("ideas")
 
-	connectContext, errorInContext := context.WithTimeout(context.Background(), 30*time.Second)
-	defer errorInContext()
+	databaseContext, cancelContext := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancelContext()
 
 	var jsonInput IdeaStructure
 	createdTime := time.Now().Unix()
 
 	errInInputJSON := gContext.ShouldBindJSON(&jsonInput)
 	if errInInputJSON != nil {
-		gContext.JSON(http.StatusBadRequest, gin.H{"status": http.StatusBadRequest, "errorCode": "bad_json_structure",
+		gContext.JSON(http.StatusBadRequest, gin.H{"status": http.StatusBadRequest,
 			"error": "Wrong structure of posted data"})
+		databaseContext.Done()
 		return
 	}
 
 	lengthOfName := len(strings.TrimSpace(jsonInput.Name))
-	lenghtOfDescription := len(strings.TrimSpace(jsonInput.Description))
+	lengthOfDescription := len(strings.TrimSpace(jsonInput.Description))
 
-	if lengthOfName == 0 || lenghtOfDescription == 0 {
-		gContext.JSON(http.StatusBadRequest, gin.H{"status": http.StatusBadRequest, "errorCode": "empty_fields",
+	if lengthOfName == 0 || lengthOfDescription == 0 {
+		gContext.JSON(http.StatusBadRequest, gin.H{"status": http.StatusBadRequest,
 			"error": "Name or description is not provided in the post"})
+		databaseContext.Done()
 		return
 
 	}
@@ -152,12 +164,10 @@ func addIdea(gContext *gin.Context) {
 		"created_at":  createdTime,
 	}
 
-	addedIdea, errInAdding := ideasCollection.InsertOne(connectContext, ideaToAdd)
+	addedIdea, errInAdding := ideasCollection.InsertOne(databaseContext, ideaToAdd)
 	if errInAdding != nil {
 		gContext.JSON(http.StatusInternalServerError, gin.H{"status": http.StatusInternalServerError,
-			"errorCode": "cannot_add_to_db",
 			"error":     "Error while saving to database"})
-		log.Fatal(errInAdding)
 		return
 	}
 
@@ -165,6 +175,8 @@ func addIdea(gContext *gin.Context) {
 	jsonInput.ID = addedIdea.InsertedID.(primitive.ObjectID)
 
 	gContext.JSON(http.StatusCreated, gin.H{"status": http.StatusCreated, "data": jsonInput})
+	databaseContext.Done()
+	return
 }
 
 func main() {
@@ -173,8 +185,14 @@ func main() {
 		port = "8000"
 	}
 
-	router := gin.New()
-	router.Use(gin.Logger())
+	router := gin.Default()
+
+	defaultCors := cors.DefaultConfig()
+
+	defaultCors.AllowOrigins = []string{ "http://localhost:3000"}
+	router.Use(cors.New(defaultCors))
+
+	databaseClient := connectToDatabase()
 
 	router.GET("/", welcome)
 
@@ -182,9 +200,13 @@ func main() {
 
 	// TODO convert to pagination endpoint
 	// router.GET("/ideas/:page", getIdeas)
-	router.GET("/ideas", getIdeas)
+	router.GET("/ideas", func (gContext *gin.Context){
+		getIdeas(gContext, databaseClient)
+	})
 
-	router.POST("/idea/add", addIdea)
+	router.POST("/idea/add", func (gContext *gin.Context){
+		addIdea(gContext, databaseClient)
+	})
 
 	// router.PUT("/updateidea/:ideaID", updateIdea)
 
