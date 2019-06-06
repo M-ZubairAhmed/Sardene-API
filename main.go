@@ -28,12 +28,19 @@ type IdeaStructure struct {
 	CreatedAt   int64              `json:"created_at" bson:"created_at"`
 }
 
-func connectToDatabase() *mongo.Client {
-	mlabsDbURL := os.Getenv("MONGO_DB_URL")
-	if len(mlabsDbURL) == 0 {
-		log.Fatal("No Database URL provided")
+func getEnvValues(envKeyStrings [7]string) map[string]string {
+	envValues := make(map[string]string)
+
+	for _, keyString := range envKeyStrings {
+		if os.Getenv(keyString) == "" {
+			log.Fatal("No env value provided for " + keyString)
+		}
+		envValues[keyString] = os.Getenv(keyString)
 	}
-	databaseURL := fmt.Sprint(mlabsDbURL)
+	return envValues
+}
+
+func connectToDatabase(databaseURL string) *mongo.Client {
 	connectOptions := options.Client()
 	connectOptions.ApplyURI(databaseURL)
 
@@ -338,19 +345,25 @@ func deleteIdea(ginContext *gin.Context, databaseClient *mongo.Client, ideaID st
 }
 
 func main() {
-	port := os.Getenv("PORT")
-	if os.Getenv("PORT") == "" {
-		port = "8000"
+	envKeys := [7]string{"ENVIRONMENT", "DB_HOST", "DB_USER", "DB_PASSWORD", "DB_URL", "DB_NAME", "PORT"}
+	env := getEnvValues(envKeys)
+
+	port := env["PORT"]
+
+	allowedOrigin := "https://sardene.cf"
+	if env["ENVIRONMENT"] == "dev" {
+		allowedOrigin = "http://localhost:3000"
 	}
 
 	router := gin.Default()
 
 	defaultCors := cors.DefaultConfig()
 
-	defaultCors.AllowOrigins = []string{"http://localhost:3000"}
+	defaultCors.AllowOrigins = []string{allowedOrigin}
 	router.Use(cors.New(defaultCors))
 
-	databaseClient := connectToDatabase()
+	databaseURL := fmt.Sprint(env["DB_HOST"], "://", env["DB_USER"], ":", env["DB_PASSWORD"], "@", env["DB_URL"], "/", env["DB_NAME"])
+	databaseClient := connectToDatabase(databaseURL)
 
 	router.GET("/", welcome)
 
