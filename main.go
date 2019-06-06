@@ -28,7 +28,7 @@ type IdeaStructure struct {
 	CreatedAt   int64              `json:"created_at" bson:"created_at"`
 }
 
-func getEnvValues(envKeyStrings [7]string) map[string]string {
+func getEnvValues(envKeyStrings [9]string) map[string]string {
 	envValues := make(map[string]string)
 
 	for _, keyString := range envKeyStrings {
@@ -64,7 +64,7 @@ func connectToDatabase(databaseURL string) *mongo.Client {
 }
 
 func welcome(gContext *gin.Context) {
-	message := "Welcome to Sardene API, \nServer running successfully" + string(http.StatusOK) +
+	message := "Welcome to Sardene API, \nServer running successfully" +
 		"\nVisit https://github.com/M-ZubairAhmed/Sardene-API for documentation."
 	gContext.String(http.StatusOK, message)
 }
@@ -345,7 +345,7 @@ func deleteIdea(ginContext *gin.Context, databaseClient *mongo.Client, ideaID st
 }
 
 func main() {
-	envKeys := [7]string{"ENVIRONMENT", "DB_HOST", "DB_USER", "DB_PASSWORD", "DB_URL", "DB_NAME", "PORT"}
+	envKeys := [9]string{"ENVIRONMENT", "DB_HOST", "DB_USER", "DB_PASSWORD", "DB_URL", "DB_NAME", "PORT", "GITUB_CLIENT", "GITHUB_SECRET"}
 	env := getEnvValues(envKeys)
 
 	port := env["PORT"]
