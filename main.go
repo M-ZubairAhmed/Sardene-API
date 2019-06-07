@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -26,6 +29,41 @@ type IdeaStructure struct {
 	Makers      int64              `json:"makers" bson:"makers"`
 	Gazers      int64              `json:"gazers" bson:"gazers"`
 	CreatedAt   int64              `json:"created_at" bson:"created_at"`
+}
+
+// GithubAccessTokenResponse : Structure of response from github after code is posted to them
+type GithubAccessTokenResponse struct {
+	AccessToken string `json:"access_token"`
+	TokenType   string `json:"token_type"`
+	Scope       string `json:"scope"`
+}
+
+// GithubUserProfileStructure : Strucutre of github profile json
+type GithubUserProfileStructure struct {
+	ID    int64  `json:"id"`
+	Login string `json:"login"`
+	Name  string `json:"name"`
+}
+
+// GithubAuthUser : Strucutre of github user and its access tokens
+type GithubAuthUser struct {
+	ID          int64  `json:"id"`
+	Login       string `json:"login"`
+	Name        string `json:"name"`
+	AccessToken string `json:"access_token"`
+	TokenType   string `json:"token_type"`
+	Scope       string `json:"scope"`
+}
+
+// GithubAuthCode : Structure for incoming code of github
+type GithubAuthCode struct {
+	Code string `json:"code"`
+}
+
+// GithubSecretsEnvs : Strucuture for passing secrets to func
+type GithubSecretsEnvs struct {
+	Client string
+	Secret string
 }
 
 func getEnvValues(envKeyStrings [9]string) map[string]string {
@@ -61,6 +99,42 @@ func connectToDatabase(databaseURL string) *mongo.Client {
 	}
 
 	return databaseClient
+}
+
+func getUserGithubProfile(accessToken string) (GithubUserProfileStructure, error) {
+	var githubProfile GithubUserProfileStructure
+	getGithubUserURL := "https://api.github.com/user"
+
+	requestUser, errInRequestingUser := http.NewRequest("GET", getGithubUserURL, nil)
+
+	if errInRequestingUser != nil {
+		return githubProfile, errInRequestingUser
+	}
+
+	authHeader := "token " + accessToken
+	requestUser.Header.Set("Accept", "application/vnd.github.v3+json")
+	requestUser.Header.Set("Authorization", authHeader)
+	httpClientForGithubProfile := http.Client{}
+	httpClientForGithubProfile.Timeout = time.Minute * 10
+
+	responseReaderWithUser, errInResponseFromGithub := httpClientForGithubProfile.Do(requestUser)
+	if errInResponseFromGithub != nil {
+		return githubProfile, errInResponseFromGithub
+	}
+	defer responseReaderWithUser.Body.Close()
+
+	responseBytesWithUser, errInResponseBody := ioutil.ReadAll(responseReaderWithUser.Body)
+	if errInResponseBody != nil {
+		return githubProfile, errInResponseBody
+	}
+
+	errInDecodingJSON := json.Unmarshal(responseBytesWithUser, &githubProfile)
+	if errInDecodingJSON != nil {
+		return githubProfile, errInDecodingJSON
+	}
+	fmt.Print(githubProfile.Name)
+
+	return githubProfile, nil
 }
 
 func welcome(gContext *gin.Context) {
@@ -123,6 +197,74 @@ func getIdeas(gContext *gin.Context, databaseClient *mongo.Client) {
 
 	gContext.JSON(http.StatusOK, gin.H{"status": http.StatusOK, "data": ideas, "count": lengthOfIdeas})
 	databaseContext.Done()
+	return
+}
+
+func authUser(ginContext *gin.Context, databaseClient *mongo.Client, githubSecrets GithubSecretsEnvs) {
+	var githubCodeInput GithubAuthCode
+
+	errInInput := ginContext.ShouldBindJSON(&githubCodeInput)
+	if errInInput != nil {
+		ginContext.JSON(http.StatusBadRequest, gin.H{"status": http.StatusBadRequest,
+			"error": "Wrong structure of posted data"})
+		return
+	}
+
+	githubAuthCode := githubCodeInput.Code
+	githubAccessTokenURL := fmt.Sprint("https://github.com/login/oauth/access_token", "?client_id=", githubSecrets.Client, "&client_secret=", githubSecrets.Secret, "&code=", githubAuthCode)
+
+	var jsonEmptyInput = []byte(`{}`)
+	postReqToGithub, errInPostToGithub := http.NewRequest("POST", githubAccessTokenURL, bytes.NewBuffer(jsonEmptyInput))
+	if errInPostToGithub != nil {
+		ginContext.JSON(http.StatusForbidden, gin.H{"status": http.StatusForbidden,
+			"error": "Cannot be authenciated", "errorDetails": errInInput.Error()})
+		return
+	}
+
+	postReqToGithub.Header.Set("Accept", "application/json")
+	httpClientForGithub := http.Client{}
+	httpClientForGithub.Timeout = time.Minute * 10
+
+	postResFromGithub, errInRespFromGithub := httpClientForGithub.Do(postReqToGithub)
+	if errInRespFromGithub != nil {
+		ginContext.JSON(http.StatusForbidden, gin.H{"status": http.StatusForbidden,
+			"error": "Cannot be authenciated", "errorDetails": errInInput.Error()})
+		return
+	}
+	defer postResFromGithub.Body.Close()
+
+	githubRespInBytes, errInReader := ioutil.ReadAll(postResFromGithub.Body)
+	if errInReader != nil {
+		ginContext.JSON(http.StatusForbidden, gin.H{"status": http.StatusForbidden,
+			"error": "Cannot be authenciated", "errorDetails": errInInput.Error()})
+		return
+	}
+
+	var jsonRespFromGithub GithubAccessTokenResponse
+	errInReadingToken := json.Unmarshal(githubRespInBytes, &jsonRespFromGithub)
+	if errInReadingToken != nil {
+		ginContext.JSON(http.StatusForbidden, gin.H{"status": http.StatusForbidden,
+			"error": "Cannot be authenciated", "errorDetails": errInInput.Error()})
+		return
+	}
+
+	userGithubProfile, errInGettingProfile := getUserGithubProfile(jsonRespFromGithub.AccessToken)
+	if errInGettingProfile != nil {
+		ginContext.JSON(http.StatusForbidden, gin.H{"status": http.StatusForbidden,
+			"error": "Cannot get user", "errorDetails": errInGettingProfile.Error()})
+		return
+	}
+
+	var githubAuthUser GithubAuthUser
+	githubAuthUser.ID = userGithubProfile.ID
+	githubAuthUser.Login = userGithubProfile.Login
+	githubAuthUser.Name = userGithubProfile.Name
+	githubAuthUser.AccessToken = jsonRespFromGithub.AccessToken
+	githubAuthUser.TokenType = jsonRespFromGithub.TokenType
+	githubAuthUser.Scope = jsonRespFromGithub.Scope
+
+	ginContext.JSON(http.StatusOK, gin.H{"status": http.StatusOK,
+		"data": githubAuthUser})
 	return
 }
 
@@ -345,7 +487,7 @@ func deleteIdea(ginContext *gin.Context, databaseClient *mongo.Client, ideaID st
 }
 
 func main() {
-	envKeys := [9]string{"ENVIRONMENT", "DB_HOST", "DB_USER", "DB_PASSWORD", "DB_URL", "DB_NAME", "PORT", "GITUB_CLIENT", "GITHUB_SECRET"}
+	envKeys := [9]string{"ENVIRONMENT", "DB_HOST", "DB_USER", "DB_PASSWORD", "DB_URL", "DB_NAME", "PORT", "GITHUB_CLIENT", "GITHUB_SECRET"}
 	env := getEnvValues(envKeys)
 
 	port := env["PORT"]
@@ -370,6 +512,14 @@ func main() {
 	// TODO convert to pagination endpoint
 	router.GET("/ideas", func(gContext *gin.Context) {
 		getIdeas(gContext, databaseClient)
+	})
+
+	router.POST("/auth", func(gContext *gin.Context) {
+		var githubSecrets GithubSecretsEnvs
+		githubSecrets.Client = env["GITHUB_CLIENT"]
+		githubSecrets.Secret = env["GITHUB_SECRET"]
+
+		authUser(gContext, databaseClient, githubSecrets)
 	})
 
 	router.POST("/idea/add", func(gContext *gin.Context) {
