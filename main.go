@@ -26,6 +26,7 @@ type IdeaStructure struct {
 	Name        string             `json:"name" bson:"name"`
 	Description string             `json:"description" bson:"description"`
 	Publisher   string             `json:"publisher" bson:"publisher"`
+	PublisherID int64              `json:"publisher_id" bson:"publisher_id"`
 	Makers      int64              `json:"makers" bson:"makers"`
 	Gazers      int64              `json:"gazers" bson:"gazers"`
 	CreatedAt   int64              `json:"created_at" bson:"created_at"`
@@ -40,14 +41,14 @@ type GithubAccessTokenResponse struct {
 
 // GithubUserProfileStructure : Strucutre of github profile json
 type GithubUserProfileStructure struct {
-	ID    int64  `json:"id"`
-	Login string `json:"login"`
-	Name  string `json:"name"`
+	UserID int64  `json:"id"`
+	Login  string `json:"login"`
+	Name   string `json:"name"`
 }
 
 // GithubAuthUser : Strucutre of github user and its access tokens
 type GithubAuthUser struct {
-	ID          int64  `json:"id"`
+	UserID      int64  `json:"userID"`
 	Login       string `json:"login"`
 	Name        string `json:"name"`
 	AccessToken string `json:"access_token"`
@@ -66,7 +67,7 @@ type GithubSecretsEnvs struct {
 	Secret string
 }
 
-func getEnvValues(envKeyStrings [9]string) map[string]string {
+func getEnvValues(envKeyStrings [5]string) map[string]string {
 	envValues := make(map[string]string)
 
 	for _, keyString := range envKeyStrings {
@@ -101,7 +102,30 @@ func connectToDatabase(databaseURL string) *mongo.Client {
 	return databaseClient
 }
 
+func extractAuthHeader(ginContext *gin.Context) (string, error) {
+	const emptyString string = ""
+	invalidHeaderFormatError := fmt.Errorf("Invalid authentication header format")
+
+	authHeader := ginContext.GetHeader("Authorization")
+
+	if len(authHeader) == 0 {
+		return emptyString, invalidHeaderFormatError
+	}
+	if strings.Contains(authHeader, "Bearer") == false {
+		return emptyString, invalidHeaderFormatError
+	}
+
+	trimmedAuthFromHeader := strings.TrimPrefix(authHeader, "Bearer")
+	trimmedAuthFromHeader = strings.TrimSpace(trimmedAuthFromHeader)
+	if strings.Contains(trimmedAuthFromHeader, " ") == true {
+		return emptyString, invalidHeaderFormatError
+	}
+
+	return trimmedAuthFromHeader, nil
+}
+
 func getUserGithubProfile(accessToken string) (GithubUserProfileStructure, error) {
+	var emptyGithubProfile GithubUserProfileStructure
 	var githubProfile GithubUserProfileStructure
 	getGithubUserURL := "https://api.github.com/user"
 
@@ -119,35 +143,91 @@ func getUserGithubProfile(accessToken string) (GithubUserProfileStructure, error
 
 	responseReaderWithUser, errInResponseFromGithub := httpClientForGithubProfile.Do(requestUser)
 	if errInResponseFromGithub != nil {
-		return githubProfile, errInResponseFromGithub
+		return emptyGithubProfile, errInResponseFromGithub
 	}
 	defer responseReaderWithUser.Body.Close()
 
 	responseBytesWithUser, errInResponseBody := ioutil.ReadAll(responseReaderWithUser.Body)
 	if errInResponseBody != nil {
-		return githubProfile, errInResponseBody
+		return emptyGithubProfile, errInResponseBody
 	}
 
 	errInDecodingJSON := json.Unmarshal(responseBytesWithUser, &githubProfile)
 	if errInDecodingJSON != nil {
-		return githubProfile, errInDecodingJSON
+		return emptyGithubProfile, errInDecodingJSON
 	}
-	fmt.Print(githubProfile.Name)
+
+	if githubProfile.Login == "" {
+		return githubProfile, fmt.Errorf("Invalid user")
+	}
 
 	return githubProfile, nil
 }
 
-func welcome(gContext *gin.Context) {
-	message := "Welcome to Sardene API, \nServer running successfully" +
-		"\nVisit https://github.com/M-ZubairAhmed/Sardene-API for documentation."
-	gContext.String(http.StatusOK, message)
+func validateAndGetUser(ginContext *gin.Context) (GithubUserProfileStructure, error) {
+	var emptyGithubUser GithubUserProfileStructure
+
+	userAccessToken, errInAccessTokenFormat := extractAuthHeader(ginContext)
+	if errInAccessTokenFormat != nil {
+		return emptyGithubUser, errInAccessTokenFormat
+	}
+
+	githubUser, errInGithubAccess := getUserGithubProfile(userAccessToken)
+	if errInGithubAccess != nil {
+		return emptyGithubUser, errInGithubAccess
+	}
+
+	return githubUser, nil
 }
 
-func getIdeas(gContext *gin.Context, databaseClient *mongo.Client) {
+func addUserToDatabase(githubUser GithubUserProfileStructure, databaseClient *mongo.Client) error {
+	usersCollections := databaseClient.Database("sardene-db").Collection("users")
+	databaseContext, cancelDBContext := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancelDBContext()
+
+	userFilter := bson.M{"userID": githubUser.UserID}
+	userFoundResult := usersCollections.FindOne(databaseContext, userFilter, options.FindOne())
+
+	var foundUserInDB GithubUserProfileStructure
+
+	doesUserExistsInDB := true
+
+	errInDecoding := userFoundResult.Decode(&foundUserInDB)
+	if errInDecoding != nil {
+		if errInDecoding.Error() == "mongo: no documents in result" {
+			doesUserExistsInDB = false
+		} else {
+			return errInDecoding
+		}
+	}
+
+	if doesUserExistsInDB == true {
+		return nil
+	}
+	// Else user not found in db, new user
+	userToAdd := bson.M{
+		"userID": githubUser.UserID,
+		"login":  githubUser.Login,
+		"name":   githubUser.Name,
+	}
+	_, errInAddingUser := usersCollections.InsertOne(databaseContext, userToAdd, options.InsertOne())
+	if errInAddingUser != nil {
+		return errInAddingUser
+	}
+
+	return nil
+}
+
+func welcome(ginContext *gin.Context) {
+	message := "Welcome to Sardene API, \nServer running successfully" +
+		"\nVisit https://github.com/M-ZubairAhmed/Sardene-API for documentation."
+	ginContext.String(http.StatusOK, message)
+}
+
+func getIdeas(ginContext *gin.Context, databaseClient *mongo.Client) {
 	var ideas []*IdeaStructure
 
 	ideasCollection := databaseClient.Database("sardene-db").Collection("ideas")
-
 	databaseContext, cancelDBContext := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancelDBContext()
 
@@ -157,7 +237,7 @@ func getIdeas(gContext *gin.Context, databaseClient *mongo.Client) {
 	if errorInFinding != nil {
 		_ = ideasCursor.Close(databaseContext)
 		databaseContext.Done()
-		gContext.JSON(http.StatusServiceUnavailable, gin.H{"status": http.StatusServiceUnavailable,
+		ginContext.JSON(http.StatusServiceUnavailable, gin.H{"status": http.StatusServiceUnavailable,
 			"error": "Error in searching database"})
 		return
 	}
@@ -169,9 +249,9 @@ func getIdeas(gContext *gin.Context, databaseClient *mongo.Client) {
 		if errInDecoding != nil {
 			_ = ideasCursor.Close(databaseContext)
 			databaseContext.Done()
-			gContext.JSON(http.StatusInternalServerError, gin.H{"status": http.StatusInternalServerError,
-				"error": "Error in decoding database"})
-			log.Fatal(errInDecoding)
+			ginContext.JSON(http.StatusInternalServerError, gin.H{"status": http.StatusInternalServerError,
+				"error": "Error in decoding database", "errorDetails": errInDecoding.Error()})
+			return
 		}
 
 		ideas = append(ideas, &idea)
@@ -181,21 +261,21 @@ func getIdeas(gContext *gin.Context, databaseClient *mongo.Client) {
 	if errInCursor != nil {
 		databaseContext.Done()
 		_ = ideasCursor.Close(databaseContext)
-		gContext.JSON(http.StatusInternalServerError, gin.H{"status": http.StatusInternalServerError,
+		ginContext.JSON(http.StatusInternalServerError, gin.H{"status": http.StatusInternalServerError,
 			"error": "Error while iterating database"})
 	}
 
 	errInClosingCursor := ideasCursor.Close(databaseContext)
 	if errInClosingCursor != nil {
 		databaseContext.Done()
-		gContext.JSON(http.StatusServiceUnavailable, gin.H{"status": http.StatusServiceUnavailable,
+		ginContext.JSON(http.StatusServiceUnavailable, gin.H{"status": http.StatusServiceUnavailable,
 			"error": "Error while closing iterator of database"})
 		return
 	}
 
 	lengthOfIdeas := len(ideas)
 
-	gContext.JSON(http.StatusOK, gin.H{"status": http.StatusOK, "data": ideas, "count": lengthOfIdeas})
+	ginContext.JSON(http.StatusOK, gin.H{"status": http.StatusOK, "data": ideas, "count": lengthOfIdeas})
 	databaseContext.Done()
 	return
 }
@@ -256,19 +336,35 @@ func authUser(ginContext *gin.Context, databaseClient *mongo.Client, githubSecre
 	}
 
 	var githubAuthUser GithubAuthUser
-	githubAuthUser.ID = userGithubProfile.ID
+	githubAuthUser.UserID = userGithubProfile.UserID
 	githubAuthUser.Login = userGithubProfile.Login
 	githubAuthUser.Name = userGithubProfile.Name
 	githubAuthUser.AccessToken = jsonRespFromGithub.AccessToken
 	githubAuthUser.TokenType = jsonRespFromGithub.TokenType
 	githubAuthUser.Scope = jsonRespFromGithub.Scope
 
+	errInAddingUserInDB := addUserToDatabase(userGithubProfile, databaseClient)
+	if errInAddingUserInDB != nil {
+		ginContext.JSON(http.StatusForbidden, gin.H{"status": http.StatusForbidden,
+			"error": "Cannot add user in database", "errorDetails": errInAddingUserInDB.Error()})
+		return
+	}
+
 	ginContext.JSON(http.StatusOK, gin.H{"status": http.StatusOK,
 		"data": githubAuthUser})
+
 	return
 }
 
-func addIdea(gContext *gin.Context, databaseClient *mongo.Client) {
+func addIdea(ginContext *gin.Context, databaseClient *mongo.Client) {
+
+	user, errInValidatingUser := validateAndGetUser(ginContext)
+	if errInValidatingUser != nil {
+		ginContext.JSON(http.StatusUnauthorized, gin.H{"status": http.StatusUnauthorized,
+			"error": "Autherization failed", "errorDetails": errInValidatingUser.Error()})
+		return
+	}
+
 	ideasCollection := databaseClient.Database("sardene-db").Collection("ideas")
 
 	databaseContext, cancelContext := context.WithTimeout(context.Background(), 30*time.Second)
@@ -277,9 +373,9 @@ func addIdea(gContext *gin.Context, databaseClient *mongo.Client) {
 	var jsonInput IdeaStructure
 	createdTime := time.Now().Unix()
 
-	errInInputJSON := gContext.ShouldBindJSON(&jsonInput)
+	errInInputJSON := ginContext.ShouldBindJSON(&jsonInput)
 	if errInInputJSON != nil {
-		gContext.JSON(http.StatusBadRequest, gin.H{"status": http.StatusBadRequest,
+		ginContext.JSON(http.StatusBadRequest, gin.H{"status": http.StatusBadRequest,
 			"error": "Wrong structure of posted data"})
 		databaseContext.Done()
 		return
@@ -289,7 +385,7 @@ func addIdea(gContext *gin.Context, databaseClient *mongo.Client) {
 	lengthOfDescription := len(strings.TrimSpace(jsonInput.Description))
 
 	if lengthOfName == 0 || lengthOfDescription == 0 {
-		gContext.JSON(http.StatusBadRequest, gin.H{"status": http.StatusBadRequest,
+		ginContext.JSON(http.StatusBadRequest, gin.H{"status": http.StatusBadRequest,
 			"error": "Name or description is not provided in the post"})
 		databaseContext.Done()
 		return
@@ -302,21 +398,24 @@ func addIdea(gContext *gin.Context, databaseClient *mongo.Client) {
 	// Defaulting data
 	jsonInput.Makers = 0
 	jsonInput.Gazers = 0
-	jsonInput.Publisher = "Unnamed contact"
 	jsonInput.CreatedAt = createdTime
+	// User data
+	jsonInput.Publisher = user.Login
+	jsonInput.PublisherID = user.UserID
 
 	ideaToAdd := bson.M{
-		"name":        jsonInput.Name,
-		"description": jsonInput.Description,
-		"publisher":   jsonInput.Publisher,
-		"makers":      jsonInput.Makers,
-		"gazers":      jsonInput.Gazers,
-		"created_at":  createdTime,
+		"name":         jsonInput.Name,
+		"description":  jsonInput.Description,
+		"publisher":    jsonInput.Publisher,
+		"publisher_id": jsonInput.PublisherID,
+		"makers":       jsonInput.Makers,
+		"gazers":       jsonInput.Gazers,
+		"created_at":   createdTime,
 	}
 
 	addedIdea, errInAdding := ideasCollection.InsertOne(databaseContext, ideaToAdd)
 	if errInAdding != nil {
-		gContext.JSON(http.StatusInternalServerError, gin.H{"status": http.StatusInternalServerError,
+		ginContext.JSON(http.StatusInternalServerError, gin.H{"status": http.StatusInternalServerError,
 			"error": "Error while saving to database"})
 		return
 	}
@@ -324,7 +423,7 @@ func addIdea(gContext *gin.Context, databaseClient *mongo.Client) {
 	// Get the generated ID from DB
 	jsonInput.ID = addedIdea.InsertedID.(primitive.ObjectID)
 
-	gContext.JSON(http.StatusCreated, gin.H{"status": http.StatusCreated, "data": jsonInput})
+	ginContext.JSON(http.StatusCreated, gin.H{"status": http.StatusCreated, "data": jsonInput})
 	databaseContext.Done()
 	return
 }
@@ -487,7 +586,7 @@ func deleteIdea(ginContext *gin.Context, databaseClient *mongo.Client, ideaID st
 }
 
 func main() {
-	envKeys := [9]string{"ENVIRONMENT", "DB_HOST", "DB_USER", "DB_PASSWORD", "DB_URL", "DB_NAME", "PORT", "GITHUB_CLIENT", "GITHUB_SECRET"}
+	envKeys := [5]string{"ENVIRONMENT", "DB_URL", "PORT", "GITHUB_CLIENT", "GITHUB_SECRET"}
 	env := getEnvValues(envKeys)
 
 	port := env["PORT"]
@@ -504,26 +603,25 @@ func main() {
 	defaultCors.AllowOrigins = []string{allowedOrigin}
 	router.Use(cors.New(defaultCors))
 
-	databaseURL := fmt.Sprint(env["DB_HOST"], "://", env["DB_USER"], ":", env["DB_PASSWORD"], "@", env["DB_URL"], "/", env["DB_NAME"])
-	databaseClient := connectToDatabase(databaseURL)
+	databaseClient := connectToDatabase(env["DB_URL"])
 
 	router.GET("/", welcome)
 
 	// TODO convert to pagination endpoint
-	router.GET("/ideas", func(gContext *gin.Context) {
-		getIdeas(gContext, databaseClient)
+	router.GET("/ideas", func(ginContext *gin.Context) {
+		getIdeas(ginContext, databaseClient)
 	})
 
-	router.POST("/auth", func(gContext *gin.Context) {
+	router.POST("/auth", func(ginContext *gin.Context) {
 		var githubSecrets GithubSecretsEnvs
 		githubSecrets.Client = env["GITHUB_CLIENT"]
 		githubSecrets.Secret = env["GITHUB_SECRET"]
 
-		authUser(gContext, databaseClient, githubSecrets)
+		authUser(ginContext, databaseClient, githubSecrets)
 	})
 
-	router.POST("/idea/add", func(gContext *gin.Context) {
-		addIdea(gContext, databaseClient)
+	router.POST("/idea/add", func(ginContext *gin.Context) {
+		addIdea(ginContext, databaseClient)
 	})
 
 	router.PATCH("/idea/gaze/:ideaID", func(ginContext *gin.Context) {
