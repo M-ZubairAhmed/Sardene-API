@@ -591,17 +591,23 @@ func main() {
 
 	port := env["PORT"]
 
+	router := gin.Default()
+
 	allowedOrigin := "https://sardene.cf"
 	if env["ENVIRONMENT"] == "dev" {
 		allowedOrigin = "http://localhost:3000"
 	}
 
-	router := gin.Default()
+	corsConfig := cors.Config{
+		AllowOrigins:     []string{allowedOrigin},
+		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE"},
+		AllowHeaders:     []string{"Origin", "Authorization", "Cache-Control", "Accept", "Content-Type"},
+		ExposeHeaders:    []string{"Content-Length"},
+		AllowCredentials: true,
+		MaxAge:           12 * time.Hour,
+	}
 
-	defaultCors := cors.DefaultConfig()
-
-	defaultCors.AllowOrigins = []string{allowedOrigin}
-	router.Use(cors.New(defaultCors))
+	router.Use(cors.New(corsConfig))
 
 	databaseClient := connectToDatabase(env["DB_URL"])
 
