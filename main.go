@@ -67,6 +67,12 @@ type GithubSecretsEnvs struct {
 	Secret string
 }
 
+// IdeaLikesStructure : Strucutre for like in like collections
+type IdeaLikesStructure struct {
+	UserID int64              `json:"userID" bson:"userID"`
+	IdeaID primitive.ObjectID `json:"ideaID" bson:"ideaID"`
+}
+
 func getEnvValues(envKeyStrings [5]string) map[string]string {
 	envValues := make(map[string]string)
 
@@ -429,31 +435,95 @@ func addIdea(ginContext *gin.Context, databaseClient *mongo.Client) {
 }
 
 func gazeIdea(ginContext *gin.Context, databaseClient *mongo.Client, ideaID string) {
-	ideasCollection := databaseClient.Database("sardene-db").Collection("ideas")
 
-	databaseContext, cancelContext := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancelContext()
-
+	// Check if Idea id is valid
 	hexIdeaID, errInValidatingID := primitive.ObjectIDFromHex(ideaID)
 	if errInValidatingID != nil {
-		databaseContext.Done()
 		ginContext.JSON(http.StatusBadRequest, gin.H{"status": http.StatusBadRequest,
 			"error": "Error, Idea id is not valid"})
 		return
 	}
 
+	// Getting user details from the header
+	user, errInValidatingUser := validateAndGetUser(ginContext)
+	if errInValidatingUser != nil {
+		ginContext.JSON(http.StatusUnauthorized, gin.H{"status": http.StatusUnauthorized,
+			"error": "Autherization failed", "errorDetails": errInValidatingUser.Error()})
+		return
+	}
+
+	databaseContext, cancelContext := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancelContext()
+
+	// Checking if idea exists
+	var ideaFound IdeaStructure
+	ideasCollection := databaseClient.Database("sardene-db").Collection("ideas")
 	findIdeaFilter := bson.M{"_id": hexIdeaID}
+
+	ideaFoundInDB := ideasCollection.FindOne(databaseContext, findIdeaFilter, options.FindOne())
+
+	errInDecodingIdea := ideaFoundInDB.Decode(&ideaFound)
+	if errInDecodingIdea != nil {
+		databaseContext.Done()
+		if errInDecodingIdea.Error() == "mongo: no documents in result" {
+			ginContext.JSON(http.StatusNotFound, gin.H{"status": http.StatusNotFound,
+				"error": "Error, Idea does not exists", "errorDetails": errInDecodingIdea.Error()})
+			return
+		}
+		ginContext.JSON(http.StatusNotFound, gin.H{"status": http.StatusNotFound,
+			"error": "Error, Couldnt decode idea from idea id", "errorDetails": errInDecodingIdea.Error()})
+		return
+	}
+
+	// Checking if user already liked
+	likesCollection := databaseClient.Database("sardene-db").Collection("likes")
+
+	userlikedFilter := bson.M{"userID": user.UserID, "ideaID": hexIdeaID}
+	userFoundResult := likesCollection.FindOne(databaseContext, userlikedFilter, options.FindOne())
+
+	didUserLikedIdeaBefore := true
+
+	var userLikedIdea IdeaLikesStructure
+	errInDecoding := userFoundResult.Decode(&userLikedIdea)
+	if errInDecoding != nil {
+		if errInDecoding.Error() == "mongo: no documents in result" {
+			didUserLikedIdeaBefore = false
+		}
+	}
+
+	if didUserLikedIdeaBefore == true {
+		databaseContext.Done()
+		ginContext.JSON(http.StatusConflict, gin.H{"status": http.StatusConflict,
+			"error": "Error, User already liked the idea"})
+		return
+	}
+
+	// Find idea and Increasing count in idea DB
 	updateGazeOfIdea := bson.M{"$inc": bson.M{"gazers": 1}}
 
-	updatedIdea, errInFindingIdea := ideasCollection.UpdateOne(databaseContext, findIdeaFilter, updateGazeOfIdea)
+	_, errInFindingIdea := ideasCollection.UpdateOne(databaseContext, findIdeaFilter, updateGazeOfIdea)
 	if errInFindingIdea != nil {
 		databaseContext.Done()
 		ginContext.JSON(http.StatusNotFound, gin.H{"status": http.StatusNotFound, "error": "Error, Idea not found"})
 		return
 	}
 
+	// Adding user to likes DB
+	ideaLikedByUserToAdd := bson.M{
+		"userID": user.UserID,
+		"ideaID": hexIdeaID,
+	}
+
+	_, errInAdding := likesCollection.InsertOne(databaseContext, ideaLikedByUserToAdd)
+	if errInAdding != nil {
+		databaseContext.Done()
+		ginContext.JSON(http.StatusInternalServerError, gin.H{"status": http.StatusInternalServerError,
+			"error": "Error while saving to database"})
+		return
+	}
+
 	ginContext.JSON(http.StatusOK, gin.H{"status": http.StatusOK, "data": "",
-		"message": "Increased gaze count of " + string(updatedIdea.ModifiedCount) + "idea"})
+		"message": "Increased gaze count of idea"})
 	databaseContext.Done()
 	return
 }
