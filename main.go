@@ -528,6 +528,75 @@ func gazeIdea(ginContext *gin.Context, databaseClient *mongo.Client, ideaID stri
 	return
 }
 
+func getGazedIdeas(ginContext *gin.Context, databaseClient *mongo.Client) {
+	// Getting user details from the header
+	user, errInValidatingUser := validateAndGetUser(ginContext)
+	if errInValidatingUser != nil {
+		ginContext.JSON(http.StatusUnauthorized, gin.H{"status": http.StatusUnauthorized,
+			"error": "Autherization failed", "errorDetails": errInValidatingUser.Error()})
+		return
+	}
+
+	ideasCollection := databaseClient.Database("sardene-db").Collection("likes")
+	databaseContext, cancelContext := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancelContext()
+
+	findingAllUserLikedIdeas := bson.M{"userID": user.UserID}
+	foundIdeasUserLikedCursor, errInFindingUsersLikedIdeas := ideasCollection.Find(databaseContext, findingAllUserLikedIdeas, options.Find())
+
+	// Cursor errors
+	if errInFindingUsersLikedIdeas != nil {
+		_ = foundIdeasUserLikedCursor.Close(databaseContext)
+		databaseContext.Done()
+		ginContext.JSON(http.StatusServiceUnavailable, gin.H{"status": http.StatusServiceUnavailable,
+			"error": "Error in searching database", "errorDetails": errInFindingUsersLikedIdeas.Error()})
+		return
+	}
+	errInFoundIdeasCursor := foundIdeasUserLikedCursor.Err()
+	if errInFoundIdeasCursor != nil {
+		_ = foundIdeasUserLikedCursor.Close(databaseContext)
+		databaseContext.Done()
+		ginContext.JSON(http.StatusServiceUnavailable, gin.H{"status": http.StatusServiceUnavailable,
+			"error": "Error in searching database", "errorDetails": errInFoundIdeasCursor.Error()})
+		return
+	}
+
+	// Will contains all the user liked ideas
+	var userLikedIdeas []*IdeaLikesStructure
+
+	// Looping throught all user ideas
+	for foundIdeasUserLikedCursor.Next(databaseContext) {
+		var userLikedIdea IdeaLikesStructure
+
+		errInDecodedUserLikedIdea := foundIdeasUserLikedCursor.Decode(&userLikedIdea)
+
+		if errInDecodedUserLikedIdea != nil {
+			_ = foundIdeasUserLikedCursor.Close(databaseContext)
+			databaseContext.Done()
+			ginContext.JSON(http.StatusServiceUnavailable, gin.H{"status": http.StatusServiceUnavailable,
+				"error": "Error in searching database", "errorDetails": errInDecodedUserLikedIdea.Error()})
+			return
+		}
+
+		// Appending to user liked ideas array if no error found above
+		userLikedIdeas = append(userLikedIdeas, &userLikedIdea)
+	}
+
+	// Close the cursor after looping
+	errInClosingCursor := foundIdeasUserLikedCursor.Close(databaseContext)
+	if errInClosingCursor != nil {
+		databaseContext.Done()
+		ginContext.JSON(http.StatusServiceUnavailable, gin.H{"status": http.StatusServiceUnavailable,
+			"error": "Error while closing iterator of database"})
+		return
+	}
+
+	totalNumberOfIdeas := len(userLikedIdeas)
+
+	ginContext.JSON(http.StatusOK, gin.H{"status": http.StatusOK, "data": userLikedIdeas, "count": totalNumberOfIdeas})
+	databaseContext.Done()
+}
+
 func makeIdea(ginContext *gin.Context, databaseClient *mongo.Client, ideaID string) {
 	ideasCollection := databaseClient.Database("sardene-db").Collection("ideas")
 
@@ -705,9 +774,17 @@ func main() {
 		gazeIdea(ginContext, databaseClient, ideaID)
 	})
 
+	router.GET("/ideas/gazed", func(ginContext *gin.Context) {
+		getGazedIdeas(ginContext, databaseClient)
+	})
+
 	router.PATCH("/idea/make/:ideaID", func(ginContext *gin.Context) {
 		ideaID := ginContext.Param("ideaID")
 		makeIdea(ginContext, databaseClient, ideaID)
+	})
+
+	router.GET("/ideas/made", func(ginContext *gin.Context) {
+		// makeIdea(ginContext, databaseClient)
 	})
 
 	router.PUT("/idea/update/:ideaID", func(ginContext *gin.Context) {
