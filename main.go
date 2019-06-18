@@ -286,7 +286,7 @@ func getIdeas(ginContext *gin.Context, databaseClient *mongo.Client) {
 	return
 }
 
-func authUser(ginContext *gin.Context, databaseClient *mongo.Client, githubSecrets GithubSecretsEnvs) {
+func authenticateUser(ginContext *gin.Context, databaseClient *mongo.Client, githubSecrets GithubSecretsEnvs) {
 	var githubCodeInput GithubAuthCode
 
 	errInInput := ginContext.ShouldBindJSON(&githubCodeInput)
@@ -434,7 +434,7 @@ func addIdea(ginContext *gin.Context, databaseClient *mongo.Client) {
 	return
 }
 
-func gazeIdea(ginContext *gin.Context, databaseClient *mongo.Client, ideaID string) {
+func likeAnIdea(ginContext *gin.Context, databaseClient *mongo.Client, ideaID string) {
 
 	// Check if Idea id is valid
 	hexIdeaID, errInValidatingID := primitive.ObjectIDFromHex(ideaID)
@@ -528,7 +528,7 @@ func gazeIdea(ginContext *gin.Context, databaseClient *mongo.Client, ideaID stri
 	return
 }
 
-func getGazedIdeas(ginContext *gin.Context, databaseClient *mongo.Client) {
+func getUserLikedIdeas(ginContext *gin.Context, databaseClient *mongo.Client) {
 	// Getting user details from the header
 	user, errInValidatingUser := validateAndGetUser(ginContext)
 	if errInValidatingUser != nil {
@@ -595,37 +595,6 @@ func getGazedIdeas(ginContext *gin.Context, databaseClient *mongo.Client) {
 
 	ginContext.JSON(http.StatusOK, gin.H{"status": http.StatusOK, "data": userLikedIdeas, "count": totalNumberOfIdeas})
 	databaseContext.Done()
-}
-
-func makeIdea(ginContext *gin.Context, databaseClient *mongo.Client, ideaID string) {
-	ideasCollection := databaseClient.Database("sardene-db").Collection("ideas")
-
-	databaseContext, cancelContext := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancelContext()
-
-	hexIdeaID, errInValidatingID := primitive.ObjectIDFromHex(ideaID)
-	if errInValidatingID != nil {
-		databaseContext.Done()
-		ginContext.JSON(http.StatusBadRequest, gin.H{"status": http.StatusBadRequest,
-			"error": "Error, Idea id is not valid"})
-		return
-	}
-
-	findIdeaFilter := bson.M{"_id": hexIdeaID}
-	updateGazeOfIdea := bson.M{"$inc": bson.M{"makers": 1}}
-
-	updatedIdea, errInFindingIdea := ideasCollection.UpdateOne(databaseContext, findIdeaFilter, updateGazeOfIdea)
-	if errInFindingIdea != nil {
-		databaseContext.Done()
-		ginContext.JSON(http.StatusNotFound, gin.H{"status": http.StatusNotFound, "error": "Error, Idea not found"})
-		return
-	}
-
-	ginContext.JSON(http.StatusOK, gin.H{"status": http.StatusOK, "data": "",
-		"message": "Increased make count of " + string(updatedIdea.ModifiedCount) + "idea"})
-	databaseContext.Done()
-	return
-
 }
 
 func updateIdea(ginContext *gin.Context, databaseClient *mongo.Client, ideaID string) {
@@ -762,7 +731,7 @@ func main() {
 		githubSecrets.Client = env["GITHUB_CLIENT"]
 		githubSecrets.Secret = env["GITHUB_SECRET"]
 
-		authUser(ginContext, databaseClient, githubSecrets)
+		authenticateUser(ginContext, databaseClient, githubSecrets)
 	})
 
 	router.POST("/idea/add", func(ginContext *gin.Context) {
@@ -771,21 +740,16 @@ func main() {
 
 	router.PATCH("/idea/gaze/:ideaID", func(ginContext *gin.Context) {
 		ideaID := ginContext.Param("ideaID")
-		gazeIdea(ginContext, databaseClient, ideaID)
+		likeAnIdea(ginContext, databaseClient, ideaID)
 	})
 
 	router.GET("/ideas/gazed", func(ginContext *gin.Context) {
-		getGazedIdeas(ginContext, databaseClient)
+		getUserLikedIdeas(ginContext, databaseClient)
 	})
 
-	router.PATCH("/idea/make/:ideaID", func(ginContext *gin.Context) {
-		ideaID := ginContext.Param("ideaID")
-		makeIdea(ginContext, databaseClient, ideaID)
-	})
-
-	router.GET("/ideas/made", func(ginContext *gin.Context) {
-		// makeIdea(ginContext, databaseClient)
-	})
+	// router.GET("/user" , func(ginContext *gin.Context)){
+	// 	getUserProfile()
+	// }
 
 	router.PUT("/idea/update/:ideaID", func(ginContext *gin.Context) {
 		ideaID := ginContext.Param("ideaID")
