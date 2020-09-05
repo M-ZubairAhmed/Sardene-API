@@ -271,13 +271,7 @@ func getIdeas(ginContext *gin.Context, databaseClient *mongo.Client) {
 			"error": "Error while iterating database"})
 	}
 
-	errInClosingCursor := ideasCursor.Close(databaseContext)
-	if errInClosingCursor != nil {
-		databaseContext.Done()
-		ginContext.JSON(http.StatusServiceUnavailable, gin.H{"status": http.StatusServiceUnavailable,
-			"error": "Error while closing iterator of database"})
-		return
-	}
+	_ = ideasCursor.Close(databaseContext)
 
 	lengthOfIdeas := len(ideas)
 
@@ -583,13 +577,7 @@ func getUserLikedIdeas(ginContext *gin.Context, databaseClient *mongo.Client) {
 	}
 
 	// Close the cursor after looping
-	errInClosingCursor := foundIdeasUserLikedCursor.Close(databaseContext)
-	if errInClosingCursor != nil {
-		databaseContext.Done()
-		ginContext.JSON(http.StatusServiceUnavailable, gin.H{"status": http.StatusServiceUnavailable,
-			"error": "Error while closing iterator of database"})
-		return
-	}
+	_ = foundIdeasUserLikedCursor.Close(databaseContext)
 
 	totalNumberOfIdeas := len(userLikedIdeas)
 
@@ -701,7 +689,7 @@ func main() {
 
 	router := gin.Default()
 
-	allowedOrigin := "https://sardene.cf"
+	allowedOrigin := "https://sardene.netlify.app"
 	if env["ENVIRONMENT"] == "dev" {
 		allowedOrigin = "http://localhost:3000"
 	}
